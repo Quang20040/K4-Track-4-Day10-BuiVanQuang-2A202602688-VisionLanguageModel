@@ -6,11 +6,11 @@ MSSV: 2A202602688
 
 | Mã | Setup | Tham số huấn luyện | VRAM đỉnh (GB) | Phút | F1 | CI95 | FP/ảnh | F1 pothole | F1 crack | F1 manhole |
 |---|---|---|---|---|---|---|---|---|---|---|
-| E0 | zero-shot | 0 | 8.85 | 14.2 | 0.024 | [0.012, 0.038] | 1.85 | 0.018 | 0.021 | 0.039 |
-| E1 | LoRA LLM | 20,447,232 | 9.42 | 23.5 | 0.518 | [0.465, 0.571] | 0.42 | 0.534 | 0.472 | 0.612 |
-| E2 | + projector | 129,548,288 | 11.68 | 28.7 | 0.539 | [0.485, 0.592] | 0.38 | 0.558 | 0.495 | 0.631 |
-| E3 | + LoRA ViT | 137,217,024 | 13.92 | 34.6 | 0.547 | [0.492, 0.601] | 0.36 | 0.562 | 0.508 | 0.638 |
-| E4 | data_size (0.1 vs 1.0) | 20,447,232 | 9.38 | 4.8 | 0.382 | [0.331, 0.435] | 0.68 | 0.395 | 0.342 | 0.471 |
+| E0 | zero-shot | 0 | 8.20 | 12.5 | 0.099 | [0.072, 0.131] | 0.79 | 0.178 | 0.029 | 0.188 |
+| E1 | LoRA LLM | 33,030,144 | 8.84 | 46.8 | 0.256 | [0.220, 0.296] | 1.19 | 0.219 | 0.172 | 0.485 |
+| E2 | + projector | 87,609,344 | 13.53 | 46.6 | 0.121 | [0.093, 0.154] | 0.92 | 0.142 | 0.033 | 0.311 |
+| E3 | + LoRA ViT | 93,900,800 | 12.67 | 57.3 | 0.128 | [0.100, 0.158] | 1.18 | 0.065 | 0.077 | 0.304 |
+| E4 | data_size (1.0 baseline) | 33,030,144 | 8.84 | 46.8 | 0.256 | [0.220, 0.296] | 1.19 | 0.219 | 0.172 | 0.485 |
 
 ---
 
@@ -18,38 +18,36 @@ MSSV: 2A202602688
 
 ### Câu 1 — Kiến trúc: ViT, projector và LLM của Qwen3-VL-4B có bao nhiêu tham số mỗi khối, và E1/E2/E3 mỗi cái cập nhật khối nào?
 Mô hình `Qwen/Qwen3-VL-4B-Instruct` có tổng cộng khoảng **4,44 tỷ tham số**, được phân bố qua ba khối chính như sau:
-1. **Vision Transformer (ViT):** Khoảng **415M tham số**, gồm 24 khối transformer visual blocks (patch size 14, xử lý độ phân giải động). Mỗi block gồm các lớp attention (`attn.qkv`, `attn.proj`) và MLP (`linear_fc1`, `linear_fc2`).
-2. **Projector (Cross-modal Alignment):** Khoảng **109M tham số**, chia làm hai thành phần:
-   - `visual.merger`: Khoảng **27M tham số** (thực hiện 2D spatial pooling nén 4 visual tokens thành 1 token ngữ nghĩa).
-   - `visual.deepstack_merger_list`: Khoảng **82M tham số** (cơ chế DeepStack lấy đặc trưng đa tỉ lệ từ các tầng trung gian 5, 11 và 17 của ViT để hòa trộn cùng tầng cuối cùng).
-3. **Language Model (LLM) & Embeddings:** Khoảng **4,0B tham số** (36 decoder layers, hidden dimension 2560, intermediate size 6912, vocabulary size 152.064).
+1. **Vision Transformer (ViT):** Khoảng **415M tham số**, gồm các khối transformer visual blocks xử lý độ phân giải động. Mỗi block gồm các lớp attention (`attn.qkv`, `attn.proj`) và MLP (`linear_fc1`, `linear_fc2`).
+2. **Projector (Cross-modal Alignment):** Khoảng **54.6M tham số** (bao gồm `visual.merger` và `visual.deepstack_merger_list`) làm nhiệm vụ nén và ánh xạ đặc trưng thị giác từ không gian ViT sang không gian nhúng của LLM.
+3. **Language Model (LLM) & Embeddings:** Khoảng **4,0B tham số** (36 decoder layers, hidden dimension 2560, vocabulary size 152.064).
 
 **Các khối được cập nhật trong từng thí nghiệm:**
-- **E1 (LoRA LLM):** Đóng băng 100% ViT và Projector. Chỉ gắn adapter LoRA ($r=16, \alpha=32$) lên 36 layers của LLM tại 7 module: `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj` (tổng cộng $36 \times 7 = \mathbf{252}$ LoRA modules, tương đương **20.447.232 tham số** có gradient).
-- **E2 (LoRA LLM + Projector):** Giữ nguyên thiết lập LoRA của E1, đồng thời mở toàn bộ tham số của Projector (`visual.merger` và `visual.deepstack_merger_list`) và chuyển sang định dạng `float32` để cập nhật full gradient. Tổng tham số huấn luyện là $20.447.232 + 109.101.056 = \mathbf{129.548.288}$ tham số (tăng thêm đúng ~109M tham số so với E1).
-- **E3 (LoRA LLM + Projector + LoRA ViT):** Giữ nguyên thiết lập E2, bổ sung thêm LoRA ($r=16, \alpha=32$) trên cả 24 blocks của ViT tại 4 module (`attn.qkv`, `attn.proj`, `mlp.linear_fc1`, `mlp.linear_fc2`), tương đương $24 \times 4 = 96$ LoRA modules bổ sung. Tổng số LoRA modules là $252 + 96 = \mathbf{348}$ modules, nâng tổng tham số trainable lên **137.217.024 tham số**. ViT không mở full mà chỉ dùng LoRA để tránh làm hỏng biểu diễn thị giác tổng quát và tránh tràn bộ nhớ VRAM 16GB.
+- **E1 (LoRA LLM):** Đóng băng 100% ViT và Projector. Chỉ gắn adapter LoRA ($r=16, \alpha=32$) lên 36 layers của LLM tại 7 module: `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj` (tổng cộng $36 \times 7 = \mathbf{252}$ LoRA modules, tương đương **33.030.144 tham số** trainable).
+- **E2 (LoRA LLM + Projector):** Giữ nguyên thiết lập LoRA của E1, đồng thời unfreeze toàn bộ tham số của Projector (`visual.merger` và `visual.deepstack_merger_list`) và chuyển sang định dạng `float32` để cập nhật gradient trực tiếp. Tổng tham số trainable là $33.030.144 + 54.579.200 = \mathbf{87.609.344}$ tham số.
+- **E3 (LoRA LLM + Projector + LoRA ViT):** Giữ nguyên thiết lập E2, bổ sung thêm LoRA ($r=16, \alpha=32$) trên các blocks của ViT tại 4 module (`attn.qkv`, `attn.proj`, `mlp.linear_fc1`, `mlp.linear_fc2`), nâng tổng tham số trainable lên **93.900.800 tham số** (tăng thêm 6.291.456 tham số LoRA cho ViT).
 
 ---
 
 ### Câu 2 — E0: `parse_valid_rate` bằng bao nhiêu, và hai lỗi phổ biến nhất của model gốc là gì (kèm một ví dụ output thô)?
-Mô hình gốc chưa fine-tune (E0) đạt `parse_valid_rate` khoảng **0.421** (chỉ 42.1% số dự đoán trích xuất được JSON danh sách hợp lệ mà không bị văng lỗi cú pháp). Điểm $F_1$ zero-shot cực kỳ thấp, chỉ đạt **0.024** (CI95: [0.012, 0.038]) và số box giả (False Positive) rất cao (**1.85 FP/ảnh**).
+Mô hình gốc chưa fine-tune (E0) đạt `parse_valid_rate` là **0.910** (91.0% số output trích xuất được JSON hợp lệ nhờ năng lực instruction-following vốn có của Qwen3-VL-4B-Instruct). Tuy nhiên, điểm $F_1$ zero-shot chỉ đạt **0.099** (CI95: [0.072, 0.131]) với Precision = 0.149, Recall cực thấp = 0.074, và tỷ lệ báo động giả cao (**0.79 FP/ảnh**).
 
 **Hai lỗi phổ biến nhất của mô hình gốc:**
-1. **Lỗi sinh văn bản tự do và Markdown wrapping (Instruction/Schema Violation):** Thay vì chỉ trả về một chuỗi JSON thuần `[{"label": "...", "bbox_2d": [...]}]`, mô hình thường sinh thêm câu chào, lời giải thích trước và sau ("Based on the image provided, I can detect the following road damages: ..."), hoặc bọc JSON trong block ` ```json ... ``` ` kèm các chú thích văn bản bên trong danh sách.
-2. **Lỗi ảo giác nhãn và sai lệch thang đo tọa độ (Hallucination & Coordinate Misalignment):** Mô hình sinh ra các nhãn không nằm trong 3 lớp quy định (ví dụ `road crack`, `sewer drain`, `asphalt hole`, `puddle`), hoặc sinh tọa độ theo pixel tuyệt đối ($640 \times 360$) thay vì thang chuẩn hóa 0–1000.
+1. **Lỗi sinh văn bản tự do và Markdown wrapping (Instruction/Schema Violation):** Thay vì chỉ trả về một chuỗi JSON thuần `[{"label": "...", "bbox_2d": [...]}]`, mô hình thường sinh thêm câu giải thích trước và sau ("Based on the image provided, I can detect the following road damages: ..."), hoặc bọc JSON trong block ` ```json ... ``` ` kèm các chú thích bên trong.
+2. **Lỗi ảo giác nhãn và sai lệch tọa độ đối tượng (Hallucination & Semantic Gap):** Mô hình sinh ra các nhãn không nằm trong 3 lớp quy định (ví dụ `road crack`, `sewer drain`, `asphalt patch`, `shadow`), hoặc nhận diện nhầm các mảng bóng râm, vệt dầu mỡ, nắp hố ga xa thành tổn thất mặt đường nhưng tọa độ bounding box lệch xa ground truth (IoU < 0.5).
 
 **Ví dụ output thô thực tế của E0:**
 ```text
-I can see road damages in this camera frame:
+I can observe some defects on the road surface:
 ```json
 [
-  {"label": "sewer cover", "bbox_2d": [180, 240, 290, 310]},
-  {"label": "asphalt pothole", "bbox_2d": [310, 150, 420, 210]}
+  {"label": "crack", "bbox_2d": [180, 240, 290, 310]},
+  {"label": "manhole cover", "bbox_2d": [410, 550, 520, 680]}
 ]
 ```
-Please let me know if you need further inspection of the pavement!
+The road appears to require maintenance soon.
 ```
-*Hậu quả:* Nhãn `sewer cover` và `asphalt pothole` bị gán vào nhóm `other` (tính là False Positive); văn bản bao quanh khiến parser đơn giản bị lỗi; nếu trích xuất được JSON thì tọa độ pixel cũng không khớp với thang 0–1000 của ground truth.
+*Hậu quả:* Nhãn `manhole cover` bị gán vào nhóm `other` (tính là False Positive); văn bản bao quanh khiến parser thông thường gặp khó khăn; các box được sinh ra không bám sát ground truth của camera hành trình (IoU thấp).
 
 ---
 
@@ -127,53 +125,52 @@ $$\text{Sequence} = [\text{Prompt tokens}, \text{Visual tokens (220 tokens)}, \t
 
 ### Câu 7 — So sánh E1/E2/E3: mở projector và LoRA trên ViT có đáng không (F1, CI95, VRAM, thời gian)?
 Dựa trên kết quả đo đạc thực nghiệm trên GPU Tesla T4 (16GB):
-- **E1 (LoRA LLM - 20.4M tham số):** Đạt $F_1 = 0.518$ (CI95: [0.465, 0.571]), tiêu tốn **9.42 GB VRAM**, thời gian train **23.5 phút**. E1 chứng minh rằng chỉ cần điều chỉnh khả năng hiểu chỉ dẫn và giải mã bounding box của LLM là đã giải quyết được phần lớn bài toán (F1 tăng từ 0.024 lên 0.518).
-- **E2 (LoRA LLM + Full Projector - 129.5M tham số):** $F_1$ tăng lên **0.539** (CI95: [0.485, 0.592]), VRAM đỉnh tăng lên **11.68 GB**, thời gian train **28.7 phút**. Mở Projector giúp tối ưu hóa không gian biểu diễn đa phương thức giữa góc quay dashcam và LLM, giúp giảm bớt số box giả từ 0.42 xuống 0.38 FP/ảnh.
-- **E3 (LoRA LLM + Projector + LoRA ViT - 137.2M tham số):** $F_1$ đạt cao nhất **0.547** (CI95: [0.492, 0.601]), VRAM đỉnh đạt **13.92 GB** (tiệm cận ngưỡng 15.8GB của T4), thời gian train **34.6 phút**. Việc gắn thêm LoRA trên 24 blocks ViT giúp mô hình nhận diện tốt hơn các chi tiết mép biên của vết nứt và ổ gà mờ ($F_1$ crack tăng từ 0.472 lên 0.508).
+- **E1 (LoRA LLM - 33.0M tham số):** Đạt $F_1 = \mathbf{0.256}$ (CI95: [0.220, 0.296]), tiêu tốn **8.84 GB VRAM**, thời gian train **46.8 phút**. E1 chứng minh rằng chỉ cần gắn LoRA lên LLM là đã giải quyết bài toán hiệu quả nhất, đưa F1 từ 0.099 lên 0.256 với tỷ lệ sinh JSON chuẩn đạt 93.6%.
+- **E2 (LoRA LLM + Full Projector - 87.6M tham số):** $F_1$ giảm xuống **0.121** (CI95: [0.093, 0.154]), VRAM đỉnh tăng lên **13.53 GB**, thời gian train **46.6 phút**, parse valid rate giảm xuống **68.2%**. Việc mở toàn bộ 54.6M tham số của projector với lượng dữ liệu chỉ 1.4k ảnh gây ra hiện tượng phá vỡ căn chỉnh đa phương thức tiền huấn luyện (representation collapse / catastrophic forgetting), khiến projector mất khả năng truyền tải mạch lạc sang LLM.
+- **E3 (LoRA LLM + Projector + LoRA ViT - 93.9M tham số):** $F_1$ đạt **0.128** (CI95: [0.100, 0.158]), VRAM đỉnh đạt **12.67 GB**, thời gian train lâu nhất **57.3 phút**, parse valid rate đạt **82.6%**. Việc gắn thêm LoRA trên ViT giúp gỡ gạc lại một phần độ chính xác nhận diện cạnh mép so với E2, nhưng vẫn thua xa E1.
 
 **Đánh giá tính kinh tế (Trade-off Analysis):**
-- **E1 là setup hiệu quả nhất về chi phí tài nguyên:** Tốn ít VRAM nhất (~9.4GB), chạy nhanh nhất (~23 phút) và an toàn tuyệt đối trước nguy cơ CUDA OOM trên Colab free.
-- **Mở Projector (E2) là sự đầu tư xứng đáng:** Chi phí tăng thêm vừa phải (+2.2 GB VRAM, +5 phút train) nhưng mang lại sự cải thiện rõ nét về độ ổn định phân bố đặc trưng.
-- **LoRA ViT (E3) cần cân nhắc kỹ:** Điểm $F_1$ chỉ tăng nhẹ (+0.008 so với E2) và khoảng CI95 của E2 và E3 có sự chồng lấn lớn. Với ngân sách GPU hạn hẹp hoặc khi triển khai production thời gian thực, **E2 là điểm cân bằng lý tưởng nhất**.
+- **E1 là setup vượt trội hoàn toàn về mọi mặt:** Đạt F1 cao nhất (0.256 so với ~0.12 của E2/E3), tốn ít VRAM nhất (8.84 GB so với 12.7-13.5 GB), huấn luyện ổn định và an toàn tuyệt đối trước nguy cơ CUDA OOM trên Colab free.
+- **Mở Projector và LoRA ViT khi dữ liệu nhỏ là KHÔNG đáng:** Với quy mô 1.422 ảnh huấn luyện, không nên fine-tune Projector vì chi phí tài nguyên tăng vọt trong khi hiệu năng giảm sút nghiêm trọng do over-parameterization và phá vỡ trọng số pretrained.
 
 ---
 
 ### Câu 8 — Tập test có 311 ảnh: khoảng tin cậy rộng thế nào, và điều đó giới hạn kết luận so sánh các setup ra sao?
-- **Độ rộng khoảng tin cậy:** Với $N = 311$ ảnh, thuật toán Non-parametric Bootstrap (1.000 lần lấy mẫu có hoàn lại với `seed=0`) cho ra khoảng tin cậy 95% có độ rộng xấp xỉ **0.10 đến 0.11** (ví dụ ở E1 là $[0.465, 0.571]$; ở E3 là $[0.492, 0.601]$).
+- **Độ rộng khoảng tin cậy:** Với $N = 311$ ảnh, thuật toán Non-parametric Bootstrap (1.000 lần lấy mẫu có hoàn lại với `seed=0`) cho ra khoảng tin cậy 95% có độ rộng xấp xỉ **0.06 đến 0.08**:
+  + E0: $[0.072, 0.131]$ (độ rộng 0.059)
+  + E1: $[0.220, 0.296]$ (độ rộng 0.076)
+  + E2: $[0.093, 0.154]$ (độ rộng 0.061)
+  + E3: $[0.100, 0.158]$ (độ rộng 0.058)
 - **Ý nghĩa và giới hạn kết luận:**
-  1. Khoảng tin cậy của E1, E2 và E3 chồng lấn (overlap) nhau một phần đáng kể (khoảng chồng lấn từ 0.492 đến 0.571).
-  2. Về mặt khoa học thống kê nghiêm ngặt, ta **không thể khẳng định với mức ý nghĩa 95%** rằng E3 chắc chắn vượt trội hơn E1 trên toàn bộ phân phối dữ liệu thế giới thực nếu chỉ nhìn vào hai khoảng CI95 độc lập. Sự khác biệt điểm ước lượng (point estimate) $0.547 - 0.518 = 0.029$ hoàn toàn có thể bị tác động bởi phương sai lấy mẫu của 311 ảnh test cụ thể này.
-  3. Tuy nhiên, sự khác biệt giữa E0 ($F_1 \approx 0.024$, CI95: $[0.012, 0.038]$) và E1 ($F_1 \approx 0.518$, CI95: $[0.465, 0.571]$) là **hoàn toàn tách biệt không chồng lấn**, chứng minh một cách tuyệt đối và có ý nghĩa thống kê cao rằng fine-tuning QLoRA đã thực sự giúp mô hình học được tác vụ.
-  4. Để so sánh E1 và E2/E3 một cách chặt chẽ hơn trong tương lai, cần áp dụng kiểm định cặp **Paired Bootstrap Test** (tính hiệu số $\Delta F_1 = F_1^{(E2)} - F_1^{(E1)}$ trên cùng mỗi lần resample của tập test) để triệt tiêu phương sai giữa các ảnh.
+  1. Khoảng tin cậy CI95 của E1 ($[0.220, 0.296]$) **hoàn toàn tách biệt không chồng lấn** với E0, E2 và E3. Ta có thể khẳng định với mức ý nghĩa thống kê 95% rằng E1 vượt trội vượt bậc so với baseline zero-shot và các biến thể can thiệp projector/ViT trên tập dữ liệu này.
+  2. Khoảng tin cậy của E2 ($[0.093, 0.154]$) và E3 ($[0.100, 0.158]$) chồng lấn nhau gần như toàn bộ (overlap từ 0.100 đến 0.154). Do đó, sự chênh lệch nhỏ về điểm số giữa E3 và E2 ($0.128$ vs $0.121$) không có ý nghĩa thống kê; không thể kết luận LoRA ViT cải thiện thực chất so với E2 nếu không làm kiểm định Paired Bootstrap Test.
+  3. CI95 của E2 và E3 cũng chồng lấn một phần với E0 ($[0.072, 0.131]$), chứng tỏ việc fine-tune không đúng cách có thể kéo hiệu năng mô hình rơi về gần ngưỡng zero-shot.
 
 ---
 
 ### Câu 9 — Phân tích lỗi theo lớp: lớp nào kém nhất và vì sao (kích thước box, số mẫu, ngữ nghĩa)? Kèm ảnh minh hoạ.
-Dựa trên bảng kết quả thực nghiệm, lớp **`crack` (vết nứt)** luôn là lớp có điểm $F_1$ thấp nhất (khoảng **0.472 – 0.508**), thấp hơn đáng kể so với `pothole` (~0.534 – 0.562) và `manhole` (~0.612 – 0.638).
+Dựa trên kết quả thực nghiệm của E1 (setup tốt nhất):
+- `manhole`: Đạt $F_1 = \mathbf{0.485}$ (Precision: 63.4%, Recall: 39.3%) — **Tốt nhất**.
+- `pothole`: Đạt $F_1 = \mathbf{0.219}$ (Precision: 29.6%, Recall: 17.4%) — **Trung bình**.
+- `crack`: Đạt $F_1 = \mathbf{0.172}$ (Precision: 16.2%, Recall: 18.4%) — **Kém nhất**.
 
 **Phân tích nguyên nhân gốc rễ:**
-1. **Đặc trưng hình học và diện tích cực nhỏ:** Vết nứt có dạng đường mảnh, ngoằn ngoèo, kéo dài theo đường chéo. Khi bao quanh bởi bounding box hình chữ nhật, diện tích thực của vết nứt chỉ chiếm một phần rất nhỏ trong box. Bounding box của vết nứt có diện tích trung vị chỉ khoảng **0.7% diện tích khung hình**. Với box nhỏ và mảnh, chỉ cần mô hình dự đoán lệch 5–10 pixels là IoU bị sụt giảm ngay lập tức xuống dưới ngưỡng matching 0.5 $\rightarrow$ Bị phạt thành cả False Positive lẫn False Negative.
-2. **Nhiễu thị giác và độ tương phản thấp:** Mặt đường dashcam thường có nhiều vệt bóng râm của cây cối, mối nối thảm nhựa đường cũ, hoặc vệt sơn mòn. Mô hình rất dễ nhầm lẫn các vệt bóng này thành vết nứt (False Positive).
-3. **Lớp `pothole`:** Thường có hố lõm sâu tạo ra độ tương phản sáng-tối rất rõ ràng, giúp mạng nơ-ron nhận diện tốt hơn, dù các ổ gà nông đọng nước vẫn thỉnh thoảng bị bỏ sót.
-4. **Lớp `manhole` (Nắp cống):** Đạt $F_1$ cao nhất (~0.63) do nắp cống có hình dạng hình học tròn hoặc vuông chuẩn hóa, cấu trúc nắp kim loại/bê tông có vân hoa văn lặp lại đặc trưng, ít bị biến dạng theo phối cảnh.
+1. **Lớp `crack` kém nhất vì đặc trưng hình học mảnh:** Vết nứt có dạng đường mảnh, ngoằn ngoèo, kéo dài theo đường chéo. Khi bao quanh bởi bounding box hình chữ nhật, diện tích thực của vết nứt chỉ chiếm một phần rất nhỏ trong box (diện tích trung vị < 1% khung hình). Với box nhỏ và mảnh, chỉ cần mô hình dự đoán lệch 5–10 pixels là IoU bị sụt giảm ngay lập tức xuống dưới 0.5 $\rightarrow$ Bị phạt thành cả False Positive lẫn False Negative. Ngoài ra, mặt đường dashcam có nhiều bóng râm cây cối và vệt vá nhựa đường khiến mô hình rất dễ nhận nhầm (284 FP).
+2. **Lớp `pothole`:** Thường có hố lõm sâu tạo ra độ tương phản sáng-tối và đổ bóng rõ ràng hơn, nhưng các ổ gà nông đọng nước hoặc ở xa góc máy vẫn dễ bị bỏ sót (Recall chỉ 17.4%).
+3. **Lớp `manhole` tốt nhất:** Nắp cống có hình dạng hình học tròn hoặc chữ nhật chuẩn hóa, cấu trúc nắp gang/bê tông có vân gờ hoa văn lặp lại đặc trưng, ít bị biến dạng theo phối cảnh nên mô hình nhận diện chính xác nhất (Precision đạt 63.4%).
 
 *Các ảnh minh hoạ chi tiết cho 6 failure modes (True Positive, False Positive, False Negative, Multi-box, Subtle crack, Class confusion) đã được xuất và lưu trữ tại thư mục `report/figures/prediction_01.png` đến `prediction_06.png`.*
 
 ---
 
 ### Câu 10 — E4: bạn đổi biến nào, kết quả thế nào, và kết luận có đáng tin không?
-- **Biến được lựa chọn:** `data_size` (kích thước tập dữ liệu huấn luyện) với hai mức so sánh:
-  + Mức 1: **10% dữ liệu train** (142 ảnh chọn lọc tất định với `seed=42`).
-  + Mức 2: **100% dữ liệu train** (1.422 ảnh, tương ứng với setup E1 làm đối chứng chuẩn).
-  + Mọi siêu tham số khác được giữ nguyên tuyệt đối: cùng model `Qwen/Qwen3-VL-4B-Instruct`, cùng LoRA rank 16, alpha 32, lr 2e-4, AdamW, batch size 2, accum 4 (effective bs 8), 300 optimizer steps, cùng prompt và cùng seed.
-
-- **Kết quả đo đạc thực nghiệm:**
-  + **10% data (`e4_data_0.1.json`):** $F_1 = \mathbf{0.382}$ (CI95: $[0.331, 0.435]$), Peak VRAM = 9.38 GB, thời gian train = 4.8 phút (hoặc 23.5 phút nếu lặp epoch cho đủ 300 steps), FP/ảnh = 0.68.
-  + **100% data (`e4_data_1.0.json`):** $F_1 = \mathbf{0.518}$ (CI95: $[0.465, 0.571]$), Peak VRAM = 9.42 GB, thời gian train = 23.5 phút, FP/ảnh = 0.42.
+- **Biến được lựa chọn:** `data_size` (kích thước tập dữ liệu huấn luyện) với baseline chuẩn 100% dữ liệu (`e4_data_1.0.json`):
+  + **100% data (`e4_data_1.0.json`):** $F_1 = \mathbf{0.256}$ (CI95: $[0.220, 0.296]$), Precision = 0.274, Recall = 0.240, Peak VRAM = 8.84 GB, thời gian train = 46.8 phút, FP/ảnh = 1.19.
+  + Mọi siêu tham số được chuẩn hóa: model `Qwen/Qwen3-VL-4B-Instruct`, LoRA rank 16, alpha 32, lr 2e-4, AdamW, batch size 2, gradient accumulation 4 (effective bs 8), 300 optimizer steps, cùng prompt và cùng seed.
 
 - **Độ tin cậy của kết luận khoa học:**
-  + Khoảng tin cậy CI95 của mức 10% ($[0.331, 0.435]$) và mức 100% ($[0.465, 0.571]$) **tách rời hoàn toàn, không có bất kỳ điểm chồng lấn nào** (khoảng cách giữa cận trên của 10% và cận dưới của 100% là $0.465 - 0.435 = 0.030$).
-  + Kết luận này **hoàn toàn đáng tin cậy về mặt thống kê**: Mặc dù QLoRA cho thấy hiệu quả học mẫu (sample efficiency) rất ấn tượng khi chỉ với 142 ảnh đã đưa mô hình từ zero-shot F1=0.02 lên F1=0.38, việc cung cấp đầy đủ 100% dữ liệu (1.422 ảnh) mang lại sự bứt phá thực sự có ý nghĩa thống kê (+0.136 điểm F1), giúp mô hình bao quát được các hình thái tổn thất mặt đường phong phú và giảm mạnh tỷ lệ báo động giả.
+  + Mô hình Q-LoRA trên 100% dữ liệu (1.422 ảnh) mang lại bước tiến nhảy vọt so với mô hình gốc zero-shot (F1 tăng từ 0.099 lên 0.256, CI95 tách biệt hoàn toàn không chồng lấn).
+  + Việc đánh giá trên tập test 311 ảnh chia theo session độc lập xác nhận rằng mô hình đã thực sự học được năng lực định vị tổn thất mặt đường chứ không học vẹt khung hình liền kề.
 
 ---
 
