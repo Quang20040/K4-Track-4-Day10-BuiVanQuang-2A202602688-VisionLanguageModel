@@ -99,8 +99,13 @@ def train_experiment(
     if hasattr(model.config, "use_cache"):
         model.config.use_cache = False
 
-    # Collect trainable parameters
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    # Collect trainable parameters and ensure float32 for numerical stability with GradScaler
+    trainable_params = []
+    for name, p in model.named_parameters():
+        if p.requires_grad:
+            if p.dtype == torch.float16:
+                p.data = p.data.to(torch.float32)
+            trainable_params.append(p)
     trainable_count = sum(p.numel() for p in trainable_params)
     print(f"Total trainable parameters: {trainable_count:,}")
 
@@ -171,7 +176,24 @@ def train_experiment(
         running_loss += loss.item()
 
         if accum_step % config.grad_accum == 0:
-            scaler.unscale_(optimizer)
+            # Ensure no float16 gradient reaches unscale_
+            for p in trainable_params:
+                if p.grad is not None and p.grad.dtype == torch.float16:
+                    p.data = p.data.to(torch.float32)
+                    p.grad = p.grad.to(torch.float32)
+
+            try:
+                scaler.unscale_(optimizer)
+            except ValueError as e:
+                if "unscale FP16 gradients" in str(e):
+                    for p in trainable_params:
+                        if p.grad is not None and p.grad.dtype == torch.float16:
+                            p.data = p.data.to(torch.float32)
+                            p.grad = p.grad.to(torch.float32)
+                    scaler.unscale_(optimizer)
+                else:
+                    raise e
+
             torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
             scaler.step(optimizer)
             scaler.update()

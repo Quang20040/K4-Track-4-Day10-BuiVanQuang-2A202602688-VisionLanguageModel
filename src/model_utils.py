@@ -178,11 +178,17 @@ def apply_setup(
     # 3. Unfreeze projector if requested (E2, E3)
     projector_param_count = 0
     if should_train_projector:
+        for name, mod in peft_model.named_modules():
+            if any(k in name for k in ["visual.merger", "visual.deepstack_merger_list"]):
+                mod.to(torch.float32)
         for name, param in peft_model.named_parameters():
             if "visual.merger" in name or "visual.deepstack_merger_list" in name:
                 param.data = param.data.to(torch.float32)
                 param.requires_grad = True
                 projector_param_count += param.numel()
+        for name, param in peft_model.named_parameters():
+            if param.requires_grad and param.dtype != torch.float32:
+                param.data = param.data.to(torch.float32)
         print(f"[{setup_name}] Unfroze Projector (float32): {projector_param_count:,} params")
 
     stats = inspect_model_structure(peft_model)
